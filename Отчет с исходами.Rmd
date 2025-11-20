@@ -1,0 +1,826 @@
+---
+title: "Оценка шкал на исходы"
+output:
+  html_document: default
+  word_document: 
+    reference_docx: "template.docx"
+date:
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+library(readxl)
+library(tidyverse)
+library(epiR)
+library(flextable)
+df <- read_excel("Data/df.xlsx")
+
+Dummy <- function(Var, Ind){
+
+model_Se <- function(df) {
+  epi.tests(table(factor(df$value, levels = c(1,0)), factor(Var, levels = c(1,0))))$detail[c(3,4),]
+}
+
+df1 <- df |> 
+  pivot_longer(2:21) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == Ind) |> 
+  group_by(Score) |> 
+  nest() |> 
+  mutate(Se = map(data, model_Se)) |> 
+  unnest(Se)
+
+
+### p-value расчитывались в скрипте через тест Cochran Q
+pval <- df1 |> 
+  group_by(statistic) |> 
+  mutate(est = est*100) |> 
+  summarise(p = prop.test(est, c(rep(100,length(df1$Score)/2)))$p.value)
+
+df1 |> 
+  ungroup() |> 
+  left_join(pval) |> 
+  mutate(estimate = paste0(round(est*100,1), " (", round(lower*100,1), ", ", round(upper*100,1), ")"),
+         p = ifelse(p<0.001, "<0.001", round(p,3))) |> 
+  pivot_wider(id_cols = Score, names_from = statistic, values_from = c(estimate,p)) |> 
+  select(Score, estimate_se, p_se, estimate_sp, p_sp) |> 
+  arrange(Score) |> 
+  flextable() |>
+  theme_box() |> 
+  merge_v(j = "p_se") |> 
+  merge_v(j = "p_sp") |> 
+  set_header_labels(estimate_se = "Чувствительность", p_se = "p-value", 
+                    estimate_sp = "Специфичность", p_sp = "p-value") |> 
+  align(align = "center", part = "all") |> 
+  autofit()
+}
+```
+
+
+# MGV and DS_NEWBORN
+```{r}
+Dummy(Var = df$DS_NEWBORN, Ind = "MGV")
+```
+  
+Общая способность шкал (если установлен диагноз "малый гестационный возраст") определять заболевание (столбец DU в excel) низкая (по чувствительности, много ложно-отрицательных). Однако неплохо определяют отсутствие заболевания (по специфичности, немного ложно-положительных). Наилучшая по соотношению IG.  
+  
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "MGV") |> 
+  group_by(Score, DS_NEWBORN) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & DS_NEWBORN == 0, 0, 
+                        ifelse(value == 1 & DS_NEWBORN == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(DS_NEWBORN, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/MGV and DS_NEWBORN.png", dpi=400, width=8, height=7)
+```
+
+# MGV and OUTCOME_NORM
+```{r}
+Dummy(Var = df$OUTCOME_NORM, Ind = "MGV")
+```
+
+Общая способность шкал (диагноз "малый гестационный возраст") определять норму (0 по столбцу DV в excel) низкая (по чувствительности, много ложно-отрицательных). Однако неплохо (спорно) определяют не норму (по специфичности, немало ложно-положительных). Наилучшая по соотношению FMF.  
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "MGV") |> 
+  group_by(Score, OUTCOME_NORM) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_NORM == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_NORM == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_NORM, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/MGV and OUTCOME_NORM.png", dpi=400, width=8, height=7)
+```
+
+
+# MGV and OUTCOME_LOW_WEIGTH
+```{r}
+Dummy(Var = df$OUTCOME_LOW_WEIGTH, Ind = "MGV")
+```
+
+Общая способность шкал (диагноз "малый гестационный возраст") определять маловестный плод (1 по столбцу DV в excel) спорная (по чувствительности, немало ложно-отрицательных). Однако неплохо определяют отсутствие этого (по специфичности, немало ложно-положительных). Наилучшая по соотношению IG.    
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "MGV") |> 
+  group_by(Score, OUTCOME_LOW_WEIGTH) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_LOW_WEIGTH == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_LOW_WEIGTH == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_LOW_WEIGTH, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/MGV and OUTCOME_LOW_WEIGTH.png", dpi=400, width=8, height=7)
+```
+
+
+
+# MGV and OUTCOME_SMALL_SIZE
+```{r}
+Dummy(Var = df$OUTCOME_SMALL_SIZE, Ind = "MGV")
+```
+
+Общая способность шкал (диагноз "малый гестационный возраст") определять малый размер для ГВ (3 по столбцу DV в excel) плохая (по чувствительности, много ложно-отрицательных). Однако неплохо определяют отсутствие этого (по специфичности, немало ложно-положительных). Наилучшей по соотношению нет.    
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "MGV") |> 
+  group_by(Score, OUTCOME_SMALL_SIZE) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_SMALL_SIZE == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_SMALL_SIZE == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_SMALL_SIZE, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/MGV and OUTCOME_SMALL_SIZE.png", dpi=400, width=8, height=7)
+```
+
+
+
+# MGV and OUTCOME_LOW_EAT
+```{r}
+Dummy(Var = df$OUTCOME_LOW_EAT, Ind = "MGV")
+```
+
+Общая способность шкал (диагноз "малый гестационный возраст") определять недостаточность питания (4 по столбцу DV в excel) плохая (по чувствительности, много ложно-отрицательных). Однако неплохо определяют отсутствие этого (по специфичности, немало ложно-положительных). Наилучшей по соотношению нет.  
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "MGV") |> 
+  group_by(Score, OUTCOME_LOW_EAT) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_LOW_EAT == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_LOW_EAT == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_LOW_EAT, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/MGV and OUTCOME_LOW_EAT.png", dpi=400, width=8, height=7)
+```
+
+# MGV and NEG_RESULT
+```{r}
+Dummy(Var = df$NEG_RESULT, Ind = "MGV")
+```
+
+Общая способность шкал (диагноз "малый гестационный возраст") определять негативный исход (столбец DW в excel) плохая (по чувствительности, много ложно-отрицательных). Однако неплохо определяют хороший исход этого (по специфичности, немало ложно-положительных). Наилучшей по соотношению IG.  
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "MGV") |> 
+  group_by(Score, NEG_RESULT) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & NEG_RESULT == 0, 0, 
+                        ifelse(value == 1 & NEG_RESULT == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(NEG_RESULT, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/MGV and NEG_RESULT.png", dpi=400, width=8, height=7)
+```
+
+
+
+
+
+
+
+# ZRP and DS_NEWBORN
+```{r}
+Dummy(Var = df$DS_NEWBORN, Ind = "ZRP")
+```
+
+Общая способность шкал (если установлен диагноз "задержка развития плода") определять заболевание (столбец DU в excel) удовлетворительная (по чувствительности, немало, но и немного ложно-отрицательных). Также хорошо определяют отсутствие заболевания (по специфичности, немного ложно-положительных). Наилучшая по соотношению HADLOCK (по сути неплохая для скрининга).
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "ZRP") |> 
+  group_by(Score, DS_NEWBORN) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & DS_NEWBORN == 0, 0, 
+                        ifelse(value == 1 & DS_NEWBORN == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(DS_NEWBORN, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/ZRP and DS_NEWBORN.png", dpi=400, width=8, height=7)
+```
+
+
+
+# ZRP and OUTCOME_NORM
+```{r}
+Dummy(Var = df$OUTCOME_NORM, Ind = "ZRP")
+```
+
+Общая способность шкал (диагноз "задержка развития плода") определять норму (0 по столбцу DV в excel) низкая (по чувствительности и по специфичности). 
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "ZRP") |> 
+  group_by(Score, OUTCOME_NORM) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_NORM == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_NORM == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_NORM, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/ZRP and OUTCOME_NORM.png", dpi=400, width=8, height=7)
+```
+
+
+# ZRP and OUTCOME_LOW_WEIGTH
+```{r}
+Dummy(Var = df$OUTCOME_LOW_WEIGTH, Ind = "ZRP")
+```
+
+Общая способность шкал (диагноз "задержка развития плода") определять маловестный плод (1 по столбцу DV в excel) спорная (по чувствительности, немало ложно-отрицательных). Однако неплохо определяют отсутствие этого (по специфичности, но немало ложно-положительных). Наилучшие по соотношению FMF и HADLOCK.  
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "ZRP") |> 
+  group_by(Score, OUTCOME_LOW_WEIGTH) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_LOW_WEIGTH == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_LOW_WEIGTH == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_LOW_WEIGTH, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/ZRP and OUTCOME_LOW_WEIGTH.png", dpi=400, width=8, height=7)
+```
+
+
+
+# ZRP and OUTCOME_SMALL_SIZE
+```{r}
+Dummy(Var = df$OUTCOME_SMALL_SIZE, Ind = "ZRP")
+```
+
+Общая способность шкал (диагноз "ЗРП") определять малый размер для ГВ (3 по столбцу DV в excel) хорошая (по чувствительности, мало ложно-отрицательных). Однако похуже определяют отсутствие этого (по специфичности, немало ложно-положительных). Наилучшая по соотношению Medvedev.    
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "ZRP") |> 
+  group_by(Score, OUTCOME_SMALL_SIZE) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_SMALL_SIZE == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_SMALL_SIZE == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_SMALL_SIZE, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/ZRP and OUTCOME_SMALL_SIZE.png", dpi=400, width=8, height=7)
+```
+
+
+
+# ZRP and OUTCOME_LOW_EAT
+```{r}
+Dummy(Var = df$OUTCOME_LOW_EAT, Ind = "ZRP")
+```
+
+Общая способность шкал (диагноз "ЗРП") определять недостаточность питания (4 по столбцу DV в excel) удовлетворительная (по чувствительности, немного ложно-отрицательных). Однако хуже определяют отсутствие этого (по специфичности, немало ложно-положительных). Наилучшая по соотношению Medvedev.   
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "ZRP") |> 
+  group_by(Score, OUTCOME_LOW_EAT) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_LOW_EAT == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_LOW_EAT == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_LOW_EAT, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/ZRP and OUTCOME_LOW_EAT.png", dpi=400, width=8, height=7)
+```
+
+# ZRP and NEG_RESULT
+```{r}
+Dummy(Var = df$NEG_RESULT, Ind = "ZRP")
+```
+
+Общая способность шкал (диагноз "малый гестационный возраст") определять негативный исход (столбец DW в excel) удовлетворительная (по чувствительности, немало ложно-отрицательных). Однако немного получше определяют хороший исход этого (по специфичности, немало ложно-положительных). Наилучшей по соотношению FMF.  
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "ZRP") |> 
+  group_by(Score, NEG_RESULT) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & NEG_RESULT == 0, 0, 
+                        ifelse(value == 1 & NEG_RESULT == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(NEG_RESULT, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/ZRP and NEG_RESULT.png", dpi=400, width=8, height=7)
+```
+
+
+
+
+
+
+
+
+# DSBIN and DS_NEWBORN
+```{r}
+Dummy(Var = df$DS_NEWBORN, Ind = "DSBIN")
+```
+
+Общая способность шкал (если установлен диагноз заболевания: МГВ или ЗРП) определять заболевание (столбец DU в excel) хорошая (по чувствительности, немного ложно-отрицательных). Также неплохо, но похуже определяют отсутствие заболевания (по специфичности, немного ложно-положительных). Наилучшая по соотношению IG.
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "DSBIN") |> 
+  group_by(Score, DS_NEWBORN) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & DS_NEWBORN == 0, 0, 
+                        ifelse(value == 1 & DS_NEWBORN == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(DS_NEWBORN, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/DSBIN and DS_NEWBORN.png", dpi=400, width=8, height=7)
+```
+
+# DSBIN and OUTCOME_NORM
+```{r}
+Dummy(Var = df$OUTCOME_NORM, Ind = "DSBIN")
+```
+
+Общая способность шкал (диагноз заболевания) определять норму (0 по столбцу DV в excel) низкая (по чувствительности и по специфичности). 
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "DSBIN") |> 
+  group_by(Score, OUTCOME_NORM) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_NORM == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_NORM == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_NORM, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/DSBIN and OUTCOME_NORM.png", dpi=400, width=8, height=7)
+```
+
+
+# DSBIN and OUTCOME_LOW_WEIGTH
+```{r}
+Dummy(Var = df$OUTCOME_LOW_WEIGTH, Ind = "DSBIN")
+```
+
+Общая способность шкал (диагноз заболевания) определять маловестный плод (1 по столбцу DV в excel) хорошая (по чувствительности, немного ложно-отрицательных). Однако хуже определяют отсутствие этого (по специфичности, но немало ложно-положительных). Наилучшие по соотношению IG.  
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "DSBIN") |> 
+  group_by(Score, OUTCOME_LOW_WEIGTH) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_LOW_WEIGTH == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_LOW_WEIGTH == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_LOW_WEIGTH, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/DSBIN and OUTCOME_LOW_WEIGTH.png", dpi=400, width=8, height=7)
+```
+
+
+
+# DSBIN and OUTCOME_SMALL_SIZE
+```{r}
+Dummy(Var = df$OUTCOME_SMALL_SIZE, Ind = "DSBIN")
+```
+
+Общая способность шкал (диагноз заболевания) определять малый размер для ГВ (3 по столбцу DV в excel) хорошая (по чувствительности, мало ложно-отрицательных). Однако хуже определяют отсутствие этого (по специфичности, много ложно-положительных). Наилучшей по соотношению нет, с натягом IG (но плохо, на мой взгляд).  
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "DSBIN") |> 
+  group_by(Score, OUTCOME_SMALL_SIZE) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_SMALL_SIZE == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_SMALL_SIZE == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_SMALL_SIZE, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/DSBIN and OUTCOME_SMALL_SIZE.png", dpi=400, width=8, height=7)
+```
+
+
+
+# DSBIN and OUTCOME_LOW_EAT
+```{r}
+Dummy(Var = df$OUTCOME_LOW_EAT, Ind = "DSBIN")
+```
+
+Общая способность шкал (диагноз заболевание) определять недостаточность питания (4 по столбцу DV в excel) удовлетворительная, но странно, что все одинаково (по чувствительности, немного ложно-отрицательных). Однако хуже определяют отсутствие этого (по специфичности, много ложно-положительных). Наилучшая по соотношению IG.   
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "DSBIN") |> 
+  group_by(Score, OUTCOME_LOW_EAT) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & OUTCOME_LOW_EAT == 0, 0, 
+                        ifelse(value == 1 & OUTCOME_LOW_EAT == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(OUTCOME_LOW_EAT, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/DSBIN and OUTCOME_LOW_EAT.png", dpi=400, width=8, height=7)
+```
+
+# DSBIN and NEG_RESULT
+```{r}
+Dummy(Var = df$NEG_RESULT, Ind = "DSBIN")
+```
+
+Общая способность шкал (диагноз заболевание) определять негативный исход (столбец DW в excel) хорошо (по чувствительности, немало ложно-отрицательных). Однако хуже определяют хороший исход этого (по специфичности, немало ложно-положительных). Наилучшей по соотношению IG.  
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  pivot_longer(c(2:21)) |> 
+  separate(name, into = c("Score", "Index"), sep = "_") |> 
+  filter(Index == "DSBIN") |> 
+  group_by(Score, NEG_RESULT) |> 
+  count(Score, value) |> 
+  na.omit() |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & NEG_RESULT == 0, 0, 
+                        ifelse(value == 1 & NEG_RESULT == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(NEG_RESULT, levels = c("1","0"), labels = c("Yes", "No")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity')+
+  geom_label(aes(label = scales::percent(prct, accuracy = 0.1)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ Score) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(y = "Percent", x = "Outcome") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/DSBIN and NEG_RESULT.png", dpi=400, width=8, height=7)
+```
+
+
+По итогу наилучшие: IG - 7, FMF - 3, HADLOCK - 2, Medvedev - 2. Т.е. в большинстве случаев IG будет наилучшим вариантом. Ошибок будет много, но среди всех шкал это будет неплохим общим выбором. Но если возмонжно, то лучше подбирать под исход (хотя бы) шкалы.
+
+Для негативного исхода, заболевания, маловесного плода, недостаточности питания это IG, малого размера для ГВ, недостаточности питания Medvedev.
+
+
+# Уникальные пациенты
+```{r results='asis'}
+n = df |> 
+  select(ID_name, Repeat) |> 
+  count(Repeat) |> 
+  filter(Repeat == 0) |> 
+  pull(n)
+
+cat(paste("Всего уникальных пациентов = ", n, " из 181"))
+```
+
+# Количество обследований по гестационному сроку
+```{r}
+df |> 
+  select(ID, Age_week) |> 
+  count(Age_week) |> 
+  mutate(prct = scales::percent(n/sum(n), accuracy = 0.1)) |> 
+  flextable() |> 
+  theme_box() |> 
+  autofit() |> 
+  align(align = "center", part = "all") |> 
+  set_header_labels(Age_week = "Срок гестации",
+                    prct = "%")
+```
+
+Больше всего обследовано на сроке 37-39 недель (около 48%).
+
+# Таблица 1. Влияние шкал на шанс заболевания с учетом гестационного срока
+```{r}
+library(parameters)
+library(sandwich)
+df |> 
+  select(FMF_DSBIN, HADLOCK_DSBIN, MEDVEDEV_DSBIN, WHO_DSBIN, IG_DSBIN) |>
+  rename(FMF = FMF_DSBIN, HADLOCK = HADLOCK_DSBIN, Medvedev = MEDVEDEV_DSBIN, 
+         WHO = WHO_DSBIN, IG = IG_DSBIN) |> 
+  map(~glm(DS_NEWBORN ~ Age_week + .x, data = df, family = binomial())) |> 
+  map(parameters, exponentiate = T, vcov = "HC3") |> 
+  map(filter, Parameter == ".x") |> 
+  map(select, -c(Parameter,SE, z, df_error, CI)) |>
+  bind_rows(.id="Parameter") |> 
+  mutate(OR = round(Coefficient,2),
+         CI_low = round(CI_low,2),
+         CI_high = round(CI_high,2),
+         `p-value` = ifelse(p < 0.001, "<0.001", round(p,3)),
+         `95% CI` = paste0("(", CI_low, ", ", CI_high, ")")) |> 
+  select(Parameter, OR, `95% CI`, `p-value`) |> 
+  flextable() |> 
+  theme_box() |> 
+  align(align = "center", part = "all") |> 
+  autofit()
+```
+
+Построены модели, где для каждой шкалы учтен срок гестации. Получается, что если по каждой шкале установлен диагноз, то шансы иметь заболевания у новорожденного значимо возрастают (от 5 до 14 раз). Сравнивать шансы между собой не очень корректно. Важен скорее сам факт, что диагноз по любой из шкал увеличивают шанс иметь заболевание.
+
+# Таблица 2. Взаимодействие со сроком гестации
+```{r}
+df |> 
+  select(FMF_DSBIN, HADLOCK_DSBIN, MEDVEDEV_DSBIN, WHO_DSBIN, IG_DSBIN) |>
+  rename(FMF = FMF_DSBIN, HADLOCK = HADLOCK_DSBIN, Medvedev = MEDVEDEV_DSBIN, 
+         WHO = WHO_DSBIN, IG = IG_DSBIN) |> 
+  map(~glm(DS_NEWBORN ~ Age_week + .x + Age_week*.x, data = df, family = binomial())) |> 
+  map(parameters, exponentiate = T, vcov = "HC3") |> 
+  map(filter, row_number(Parameter) == 4) |> 
+  map(select, -c(Parameter,SE, z, df_error, CI)) |>
+  bind_rows(.id="Parameter") |> 
+  mutate(OR = round(Coefficient,2),
+         CI_low = round(CI_low,2),
+         CI_high = round(CI_high,2),
+         `p-value` = ifelse(p < 0.001, "<0.001", round(p,3)),
+         `95% CI` = paste0("(", CI_low, ", ", CI_high, ")")) |> 
+  select(Parameter, OR, `95% CI`, `p-value`) |> 
+  flextable() |> 
+  theme_box() |> 
+  align(align = "center", part = "all") |> 
+  autofit()
+```
+
+Тут интереснее. Это результат взаимодействия шкалы и срока. Т.е. есть ли связь, что чем старше срок, то тем более влиятельным оказывается результат шкалы на исход. Как мы видим результат незначимый. Т.е. эта гипотеза не подтверждается.
+
+# Таблица 3. Маржинальный эффект шкалы с учетом взаимодействия со сроком гестации
+
+```{r}
+library(marginaleffects)
+
+fit1 <- glm(DS_NEWBORN ~ Age_week + FMF_DSBIN + Age_week*FMF_DSBIN, data = df, family = binomial()) |>
+  avg_comparisons(variables = "FMF_DSBIN", comparison = "lnor", transform = "exp")
+
+fit2 <- glm(DS_NEWBORN ~ Age_week + HADLOCK_DSBIN + Age_week*HADLOCK_DSBIN, data = df, family = binomial()) |>
+  avg_comparisons(variables = "HADLOCK_DSBIN", comparison = "lnor", transform = "exp")
+
+fit3 <- glm(DS_NEWBORN ~ Age_week + MEDVEDEV_DSBIN + Age_week*MEDVEDEV_DSBIN, data = df, family = binomial()) |>
+  avg_comparisons(variables = "MEDVEDEV_DSBIN", comparison = "lnor", transform = "exp")
+
+fit4 <- glm(DS_NEWBORN ~ Age_week + WHO_DSBIN + Age_week*WHO_DSBIN, data = df, family = binomial()) |>
+  avg_comparisons(variables = "WHO_DSBIN", comparison = "lnor", transform = "exp")
+
+fit5 <- glm(DS_NEWBORN ~ Age_week + IG_DSBIN + Age_week*IG_DSBIN, data = df, family = binomial()) |>
+  avg_comparisons(variables = "IG_DSBIN", comparison = "lnor", transform = "exp")
+
+rbind(fit1, fit2, fit3, fit4, fit5) |> 
+  mutate(Parameter = factor(term, labels = c("FMF", "HADLOCK", "IG", "Medvedev", "WHO")),
+         OR = round(estimate, 2),
+         conf.low = round(conf.low, 2),
+         conf.high = round(conf.high, 2),
+         `95% CI` = paste0("(", conf.low, ", ", conf.high, ")"),
+         `p-value` = ifelse(p.value < 0.001, "<0.001", p.value)) |> 
+  select(Parameter, OR, `95% CI`, `p-value`) |> 
+  flextable() |> 
+  theme_box() |> 
+  align(align = "center", part = "all") |> 
+  autofit()
+```
+
+Это еще одна интересная штука. Здесь это маржинальные эффекты (т.е. усредненный общий эффект шкалы) из моделей со взаимодействиями. Представим, что наше предположение о взаимодействии валидно (независимо от того, что мы не увидили значимый результат в предыдущей таблице). Тогда мы можем получить общий результат влияния шкалы (без разделения эффектов как было в предыдущих таблицах). И вот это он. Средний маржинальный эффект (выраженный в отношении шансов) каждой шкалы иметь шанс заболевания у новорожденного. Они везде значимы. Но! Если сравнить с таблицей 1, значения не сильно отличаются (на ДИ не обращаем внимание). Получается мы снова можем сделать вывод, что взаимодействие особо не добавлять существенного вклада в общий эффект шкал. Получается нет преимуществ на разных сроках.
+
