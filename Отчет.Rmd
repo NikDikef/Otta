@@ -1,0 +1,799 @@
+---
+title: "Result"
+author: "Nikita Burlov"
+date:
+output:
+  html_document: default
+  word_document: 
+    reference_docx: "template.docx"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+
+#library
+
+library(readxl)
+library(tidyverse)
+library(ggsci)
+library(gt)
+library(scales)
+library(grid)
+library(ggh4x)
+
+#### Functions ####
+
+#boot
+btsr <- function(data, Age, Var, B, Proc, Index){
+  x <- data |> 
+    filter(`Срок нед` == Age) |> 
+    pull(Var)
+  z <- numeric(B)
+  
+  for (i in 1:B) {
+    y <- sample(x, length(x), TRUE)
+    z[i] <- quantile(y, na.rm = T, probs = Proc)
+  }
+  
+  2 * min(sum(Index <= z) + 1, sum(Index >= z) + 1) / (B + 1)
+}
+
+#cycle
+cycle <- function(N, J, Proportion, IG_score, WHO_score, 
+                  FMF_score, Had_score, Med_score, Vr, data, B){
+  J = J
+  Ind = numeric(J)
+  WHO = numeric(J)
+  Had = numeric(J)
+  Med = numeric(J)
+  FMF = numeric(J)
+  
+  outcome <- tibble(
+    Age = numeric(length(Proportion) * J),
+    p_IG = numeric(length(Proportion) * J),
+    p_WHO = numeric(length(Proportion) * J),
+    p_Had = numeric(length(Proportion) * J),
+    p_Med = numeric(length(Proportion) * J),
+    p_FMF = numeric(length(Proportion) * J),
+    prop = numeric(length(Proportion) * J),
+    Ind = numeric(length(Proportion) * J),
+    WHO = numeric(length(Proportion) * J),
+    Had = numeric(length(Proportion) * J),
+    Med = numeric(length(Proportion) * J),
+    FMF = numeric(length(Proportion) * J)
+  )
+  
+  for (n in 1:N) {
+    age = 25
+    a = 1:N
+    Prop1 = Proportion[n]
+    b = c(1, 1:(N-1)*J+1)[n]
+    Ind <- IG_score |> 
+      select(as.character(Proportion*100)) |> 
+      pull(a[n])
+    
+    WHO <- WHO_score |> 
+      select(as.character(Proportion*100)) |> 
+      pull(a[n])
+    
+    Had <- Had_score |> 
+      select(as.character(Proportion*100)) |> 
+      pull(a[n])
+    
+    Med <- Med_score |> 
+      select(as.character(Proportion*100)) |> 
+      pull(a[n])
+        
+    FMF <- FMF_score |> 
+      select(as.character(Proportion*100)) |> 
+      pull(a[n])
+    
+    for (j in b:(J+b-1)) {
+      outcome$p_IG[j] <- btsr(data = data, Age = age, Var = Vr, B = B, Proc = Prop1, Index = Ind[j-b+1])
+      outcome$p_WHO[j] <- btsr(data = data, Age = age, Var = Vr, B = B, Proc = Prop1, Index = WHO[j-b+1])
+      outcome$p_Had[j] <- btsr(data = data, Age = age, Var = Vr, B = B, Proc = Prop1, Index = Had[j-b+1])
+      outcome$p_Med[j] <- btsr(data = data, Age = age, Var = Vr, B = B, Proc = Prop1, Index = Med[j-b+1])
+      outcome$p_FMF[j] <- btsr(data = data, Age = age, Var = Vr, B = B, Proc = Prop1, Index = FMF[j-b+1])
+      outcome$Age[j] <- age
+      age <- age + 1
+      outcome$prop[j] = Prop1
+      outcome$Ind[j] = Ind[j-b+1]
+      outcome$WHO[j] = WHO[j-b+1]
+      outcome$FMF[j] = FMF[j-b+1]
+      outcome$Had[j] = Had[j-b+1]
+      outcome$Med[j] = Med[j-b+1]
+    }
+  }
+  return(outcome)
+}
+
+#AUC with p-value
+AUC <- function(data){
+  AUC <- data |> 
+    mutate(Age_norm = (Age - min(Age))/(max(Age) - min(Age))) |> 
+    group_by(prop) |> 
+    summarise(IG = DescTools::AUC(Age_norm, p_IG, method = "spline"),
+              WHO = DescTools::AUC(Age_norm, p_WHO, method = "spline"),
+              Had = DescTools::AUC(Age_norm, p_Had, method = "spline"),
+              Med = DescTools::AUC(Age_norm, p_Med, method = "spline"),
+              FMF = DescTools::AUC(Age_norm, p_FMF, method = "spline"))
+  
+  pv <- AUC |> 
+    mutate(IG = IG * 1000,
+           WHO = WHO * 1000,
+           Had = Had * 1000,
+           Med = Med * 1000,
+           FMF = FMF * 1000) |> 
+    pivot_longer(cols = 2:6) |> 
+    nest(data = -prop) |> 
+    transmute(prop = prop, 
+              p = map_dbl(data, 
+                          ~prop.test(.x$value, c(1000,1000,1000,1000,1000), correct = F)$p.val))
+  
+  AUC_P <- AUC |> 
+    mutate(IG = percent_format(accuracy = 0.01)(IG),
+           WHO = percent_format(accuracy = 0.01)(WHO),
+           Had = percent_format(accuracy = 0.01)(Had),
+           Med = percent_format(accuracy = 0.01)(Med),
+           FMF = percent_format(accuracy = 0.01)(FMF)) |> 
+    left_join(pv) |> 
+    mutate(Percentile = percent_format(accuracy = 1)(prop),
+           `p-value` = pvalue_format()(p)) |> 
+    select(Percentile, IG, WHO, Had, Med, FMF, `p-value`)
+    
+  
+  return(AUC_P)
+}
+
+#####
+
+#### DF ####
+df <- read_excel("Data/УЗИ по всей базе 2019-2022 рабочий с центилями.xlsx")
+
+df$`Медв  centile БПР` <- as.numeric(df$`Медв  centile БПР`, na.rm = T)
+df$`Медв centile ОЖ` <- as.numeric(df$`Медв centile ОЖ`, na.rm = T)
+df$`Медв centile ДБ` <- as.numeric(df$`Медв centile ДБ`, na.rm = T)
+df$`ВОЗ centile ОГ` <- as.numeric(df$`ВОЗ centile ОГ`, na.rm = T)
+df$`ВОЗ centile ДБ` <- as.numeric(df$`ВОЗ centile ДБ`, na.rm = T)
+df$`IG21st centile ОГ` <- as.numeric(df$`IG21st centile ОГ`, na.rm = T)
+df$`IG21st  centile ДБ` <- as.numeric(df$`IG21st  centile ДБ`, na.rm = T)
+df$`Had сentile БПР` <- as.numeric(df$`Had сentile БПР`, na.rm = T)
+df$`Had centile ОГ` <- as.numeric(df$`Had centile ОГ`, na.rm = T)
+df$`Had centile ДБ` <- as.numeric(df$`Had centile ДБ`, na.rm = T)
+
+df <- df |> 
+  filter(
+    ((БПР < 300) %>% replace_na(TRUE)), 
+    ((ОЖ < 3000) %>% replace_na(TRUE)),
+    ((ДБ < 200) %>% replace_na(TRUE)), 
+    ((ОЖ > 100) %>% replace_na(TRUE)),
+    ((`FMF centile ОГ` < 300) %>% replace_na(TRUE)), 
+    ((`FMF centile ОЖ...39` < 300) %>% replace_na(TRUE)),
+    ((`FMF centile ДБ` < 300) %>% replace_na(TRUE)), 
+    ((`Had centile ОЖ` < 300) %>% replace_na(TRUE)),
+    ((`ВОЗ centile ОГ` < 200) %>% replace_na(TRUE)), 
+    ((`ВОЗ centile ДБ` < 200) %>% replace_na(TRUE)),
+    ((`IG21st  centile ДБ` < 200) %>% replace_na(TRUE))
+    ) |> 
+  mutate(`IG21st centile ОЖ` = `FMF centile ОЖ...49`,
+         `FMF centile ОЖ` = `FMF centile ОЖ...39`)
+#####
+
+#### DF scores ####
+
+#IG-21
+
+IG_head <- read_excel("Data/IG ОГ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+IG_abd <- read_excel("Data/IG ОЖ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+IG_bpd <- read_excel("Data/IG БПР.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+IG_fl <- read_excel("Data/IG ДБ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+#WHO
+
+WHO_head <- read_excel("Data/WHO ОГ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+WHO_abd <- read_excel("Data/WHO ОЖ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+WHO_bpd <- read_excel("Data/WHO БПР.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+WHO_fl <- read_excel("Data/WHO ДБ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+#FMF
+
+FMF_head <- read_excel("Data/FMF ОГ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+FMF_abd <- read_excel("Data/FMF ОЖ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+FMF_fl <- read_excel("Data/FMF ДБ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+FMF_bpd <- read_excel("Data/FMF БПР.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+#Had
+
+Had_head <- read_excel("Data/Had ОГ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+Had_abd <- read_excel("Data/Had ОЖ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+Had_bpd <- read_excel("Data/Had БПР.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+Had_fl <- read_excel("Data/Had ДБ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+#Med
+
+Med_head <- read_excel("Data/Мед ОГ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+Med_abd <- read_excel("Data/Мед ОЖ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+Med_bpd <- read_excel("Data/Мед БПР.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+
+Med_fl <- read_excel("Data/Мед ДБ.xlsx") |> 
+  filter(Age %in% (25:40)) |> 
+  mutate(Age = as.numeric(Age))
+#####
+
+my_pal <- c("#155F83FF", "#800000FF", "#767676FF", "#FFA319FF", "#8A9045FF", "#C16622FF")
+fills <- c("#BC3C29FF", "#0072B5FF", "#E18727FF", "#20854EFF", "#7876B1FF")
+```
+
+# Окружность живота
+  
+Посмотрим как соотносятся наше распределение выборки с процентилями по шкалам по сроку.  
+  
+```{r percentile all age ha, fig.dpi = 300, fig.width = 12, fig.height = 6, fig.align = "center"}
+df |> 
+  filter(`Срок нед` != 41) |> 
+  group_by(`Срок нед`) |> 
+  mutate(Abd_norm = (`ОЖ` - min(`ОЖ`, na.rm = T))/(max(`ОЖ`, na.rm = T) - min(`ОЖ`, na.rm = T))*100) |> 
+  select(`IG21st centile ОЖ`, `ВОЗ centile ОЖ`, Abd_norm, `Медв centile ОЖ`, 
+         `FMF centile ОЖ`, `Had centile ОЖ`, `Срок нед`) |> 
+  ggplot() +
+  geom_density(aes(`IG21st centile ОЖ`, color = "IG"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`ВОЗ centile ОЖ`, color = "WHO"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+    geom_density(aes(`Had centile ОЖ`, color = "Hadlock"), na.rm = T, linewidth = 0.7,  linetype = 2, 
+               key_glyph = draw_key_path) +
+  geom_density(aes(`Медв centile ОЖ`, color = "Medvedev"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`FMF centile ОЖ`, color = "FMF"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(Abd_norm, color = "Sample"), na.rm = T, linewidth = 1.2, 
+               key_glyph = draw_key_path) + 
+  theme_minimal(base_size = 16) +
+  labs(x = "Percentile", y = NULL) +
+  facet_wrap( ~ `Срок нед`, ncol = 8) +
+  scale_x_continuous(breaks = seq(0,100,50)) +
+  scale_y_continuous(breaks = seq(0, 0.06, 0.03)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill="grey95"), 
+        legend.position = "top",
+        legend.key.width = unit(2, "cm")) +
+  scale_color_manual(values = my_pal, name = NULL,
+                     breaks = c("Sample", "IG", "WHO", "Hadlock", "Medvedev", "FMF")) +
+  guides(color = guide_legend(nrow = 1)) 
+
+ggsave("Plots/Fig1.png", dpi = 300, width = 12, height = 6)
+```
+  
+  
+Посмотрим на общее соотношение процентилей шкал с нашей выборкой.  
+  
+```{r percentile ha, fig.dpi = 300, fig.width = 7, fig.height = 6, fig.align = "center", out.width = '70%'}
+df |> 
+  mutate(Abd_norm = (`ОЖ` - min(`ОЖ`, na.rm = T))/(max(`ОЖ`, na.rm = T) - min(`ОЖ`, na.rm = T))*100) |> 
+  select(`IG21st centile ОЖ`, `ВОЗ centile ОЖ`, Abd_norm, `Медв centile ОЖ`, 
+         `FMF centile ОЖ`, `Had centile ОЖ`) |> 
+  ggplot() +
+  geom_density(aes(`IG21st centile ОЖ`, color = "IG"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`ВОЗ centile ОЖ`, color = "WHO"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+    geom_density(aes(`Had centile ОЖ`, color = "Hadlock"), na.rm = T, linewidth = 0.7,  linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`Медв centile ОЖ`, color = "Medvedev"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`FMF centile ОЖ`, color = "FMF"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(Abd_norm, color = "Sample"), na.rm = T, linewidth = 1.2, 
+               key_glyph = draw_key_path) + 
+  theme_minimal(base_size = 16) +
+  labs(x = "Percentile", y = NULL) +
+  scale_x_continuous(breaks = seq(0,100,25)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill="grey95"), 
+        legend.position = "right") +
+  scale_color_manual(values = my_pal, name = NULL,
+                     breaks = c("Sample", "IG", "WHO", "Hadlock", "Medvedev", "FMF")) +
+  guides(color = guide_legend(ncol = 1))
+
+ggsave("Plots/Fig2.png", dpi = 300, width = 7, height = 6)
+```
+  
+  
+Можно отметить, что распределение всех шкал скошенное, относительное нашего репрезентативного распределения.  
+  
+  
+Теперь посмотрим насколько совпадают табличные значения процентилей шкал с нашей выборкой.  
+  
+```{r accordance scores ha, fig.dpi = 300, fig.width = 10, fig.height = 10, fig.align = "center"}
+results <- cycle(N = 4, J = 16, Proportion = c(0.03,0.1,0.5,0.9), IG_score = IG_abd, WHO_score = WHO_abd, FMF_score = FMF_abd, Had_score = Had_abd, Med_score = Med_abd, Vr = 22, data = df, B = 9999)
+
+results |> 
+  mutate(prop = percent_format()(prop)) |> 
+  pivot_longer(cols = c(p_IG, p_WHO, p_Had, p_Med, p_FMF)) |> 
+  mutate(name = factor(name, levels = c("p_IG", "p_WHO", "p_Had", "p_Med", "p_FMF"), 
+                       labels = c(p_IG = "IG", p_WHO = "WHO",
+                                  p_Had = "Hadlock",p_Med = "Medvedev",p_FMF = "FMF")),
+         prop = factor(prop, levels =c ("3%", "10%", "50%", "90%"))) |> 
+  ggplot(aes(Age, value, color = name)) +
+  geom_line(size = 0.7, show.legend = F) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  theme_bw(base_size = 16) +
+  labs(x = "Gestational age", y = "Accordance") +
+  facet_grid2(name ~ prop, 
+              strip = strip_themed(background_y = elem_list_rect(fill = fills))) +
+  scale_x_continuous(breaks = seq(25, 40, 5)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.5)) +
+  theme(strip.text.y = element_text(angle = 0, color = "white"),
+        strip.background = element_rect(fill="grey95")) +
+  scale_color_nejm(name = "Score")
+
+ggsave("Plots/Fig3.png", dpi = 300, width = 10, height = 10)
+```
+  
+  
+И теперь посмотрим на непосредственный результат и сравним между собой кривые.  
+  
+```{r AUC scores ha}
+gt(AUC(results)) |> 
+  cols_align(align = "center") |> 
+  cols_width(everything() ~ px(100)) |> 
+  cols_label("Had" ~ "Hadlock", "Med" ~ "Medvedev", .fn = md)
+```
+  
+  
+# Окружность головы
+  
+  
+Посмотрим как соотносятся наше распределение выборки с процентилями по шкалам по сроку.  
+  
+```{r percentile all age hc, fig.dpi = 300, fig.width = 12, fig.height = 6, fig.align = "center"}
+df |> 
+  filter(`Срок нед` != 41) |> 
+  group_by(`Срок нед`) |> 
+  mutate(Abd_norm = (`ОГ` - min(`ОГ`, na.rm = T))/(max(`ОГ`, na.rm = T) - min(`ОГ`, na.rm = T))*100) |> 
+  select(`IG21st centile ОГ`, `ВОЗ centile ОГ`, Abd_norm, `Медв centile ОГ`, 
+         `FMF centile ОГ`, `Had centile ОГ`, `Срок нед`) |> 
+  ggplot() +
+  geom_density(aes(`IG21st centile ОГ`, color = "IG"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`ВОЗ centile ОГ`, color = "WHO"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`Had centile ОГ`, color = "Hadlock"), na.rm = T, linewidth = 0.7,  linetype = 2, 
+               key_glyph = draw_key_path) +
+    geom_density(aes(`Медв centile ОГ`, color = "Medvedev"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`FMF centile ОГ`, color = "FMF"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(Abd_norm, color = "Sample"), na.rm = T, linewidth = 1.2, 
+               key_glyph = draw_key_path) + 
+  theme_minimal(base_size = 16) +
+  labs(x = "Percentile", y = NULL) +
+  facet_wrap( ~ `Срок нед`, ncol = 8) +
+  scale_x_continuous(breaks = seq(0,100,50)) +
+  scale_y_continuous(breaks = seq(0, 0.06, 0.03)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill="grey95"), 
+        legend.position = "top",
+        legend.key.width = unit(2, "cm")) +
+  scale_color_manual(values = my_pal, name = NULL,
+                     breaks = c("Sample", "IG", "WHO", "Hadlock", "Medvedev", "FMF")) +
+  guides(color = guide_legend(nrow = 1)) 
+
+ggsave("Plots/Fig4.png", dpi = 300, width = 12, height = 6)
+```
+  
+  
+Посмотрим на общее соотношение процентилей шкал с нашей выборкой.  
+  
+```{r percentile hc, fig.dpi = 300, fig.width = 7, fig.height = 6, fig.align = "center", out.width = '70%'}
+df |> 
+  filter(`Срок нед` != 29) |> 
+  filter(`Срок нед` != 32) |> 
+  filter(`Срок нед` != 33) |> 
+  mutate(Abd_norm = (`ОГ` - min(`ОГ`, na.rm = T))/(max(`ОГ`, na.rm = T) - min(`ОГ`, na.rm = T))*100) |> 
+  select(`IG21st centile ОГ`, `ВОЗ centile ОГ`, Abd_norm, `Медв centile ОГ`, 
+         `FMF centile ОГ`, `Had centile ОГ`) |> 
+  ggplot() +
+  geom_density(aes(`IG21st centile ОГ`, color = "IG"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`ВОЗ centile ОГ`, color = "WHO"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`Had centile ОГ`, color = "Hadlock"), na.rm = T, linewidth = 0.7,  linetype = "aa",
+               key_glyph = draw_key_path) + 
+    geom_density(aes(`Медв centile ОГ`, color = "Medvedev"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`FMF centile ОГ`, color = "FMF"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(Abd_norm, color = "Sample"), na.rm = T, linewidth = 1.2, 
+               key_glyph = draw_key_path) + 
+  theme_minimal(base_size = 16) +
+  labs(x = "Percentile", y = NULL) +
+  scale_x_continuous(breaks = seq(0,100,25)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill="grey95"), 
+        legend.position = "right") +
+  scale_color_manual(values = my_pal, name = NULL,
+                     breaks = c("Sample", "IG", "WHO", "Hadlock", "Medvedev", "FMF")) +
+  guides(color = guide_legend(ncol = 1))
+
+ggsave("Plots/Fig5.png", dpi = 300, width = 7, height = 6)
+```
+  
+  
+Можно отметить, что распределение всех шкал скошенное, относительное нашего репрезентативного распределения.  
+  
+  
+Теперь посмотрим насколько совпадают табличные значения процентилей шкал с нашей выборкой.  
+  
+```{r accordance scores hc, fig.dpi = 300, fig.width = 10, fig.height = 10, fig.align = "center"}
+results <- cycle(N = 3, J = 16, Proportion = c(0.1,0.5,0.9), IG_score = IG_head, WHO_score = WHO_head, FMF_score = FMF_head, Had_score = Had_head, Med_score = Med_head, Vr = 21, data = df, B = 9999)
+
+results |> 
+  mutate(prop = percent_format()(prop)) |> 
+  pivot_longer(cols = c(p_IG, p_WHO, p_FMF, p_Had, p_Med)) |> 
+  mutate(name = factor(name, levels = c("p_IG", "p_WHO", "p_Had", "p_Med", "p_FMF"), 
+                       labels = c(p_IG = "IG", p_WHO = "WHO",
+                                  p_Had = "Hadlock",p_Med = "Medvedev",p_FMF = "FMF")),
+         prop = factor(prop, levels =c ("10%", "50%", "90%"))) |> 
+  ggplot(aes(Age, value, color = name)) +
+  geom_line(size = 0.7, show.legend = F) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  theme_bw(base_size = 16) +
+  labs(x = "Gestational age", y = "Accordance") +
+  facet_grid2(name ~ prop, 
+              strip = strip_themed(background_y = elem_list_rect(fill = fills))) +
+  scale_x_continuous(breaks = seq(25, 40, 5)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.5)) +
+  theme(strip.text.y = element_text(angle = 0, color = "white"),
+        strip.background = element_rect(fill="grey95")) +
+  scale_color_nejm(name = "Score")
+
+ggsave("Plots/Fig6.png", dpi = 300, width = 10, height = 10)
+```
+  
+  
+И теперь посмотрим на непосредственный результат и сравним между собой кривые.  
+  
+```{r AUC scores hc}
+gt(AUC(results)) |> 
+  cols_align(align = "center") |> 
+  cols_width(everything() ~ px(100))  |> 
+  cols_label("Had" ~ "Hadlock", "Med" ~ "Medvedev", .fn = md)
+```
+  
+  
+# Бипариетальный размер головы
+  
+  
+Посмотрим как соотносятся наше распределение выборки с процентилями по шкалам по сроку.  
+  
+```{r percentile all age bpd, fig.dpi = 300, fig.width = 12, fig.height = 6, fig.align = "center"}
+df |> 
+  filter(`Срок нед` != 41) |> 
+  group_by(`Срок нед`) |> 
+  mutate(Abd_norm = (`БПР` - min(`БПР`, na.rm = T))/(max(`БПР`, na.rm = T) - min(`БПР`, na.rm = T))*100) |> 
+  select(`IG21st centile БПР`, `ВОЗ centile БПР`, Abd_norm, `Медв  centile БПР`, 
+          `Had сentile БПР`, `Срок нед`) |> 
+  ggplot() +
+  geom_density(aes(`IG21st centile БПР`, color = "IG"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`ВОЗ centile БПР`, color = "WHO"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`Had сentile БПР`, color = "Hadlock"), na.rm = T, linewidth = 0.7,  linetype = 2, 
+               key_glyph = draw_key_path) +
+    geom_density(aes(`Медв  centile БПР`, color = "Medvedev"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(Abd_norm, color = "Sample"), na.rm = T, linewidth = 1.2, 
+               key_glyph = draw_key_path) + 
+  theme_minimal(base_size = 16) +
+  labs(x = "Percentile", y = NULL) +
+  facet_wrap( ~ `Срок нед`, ncol = 8) +
+  scale_x_continuous(breaks = seq(0,100,50)) +
+  scale_y_continuous(breaks = seq(0, 0.06, 0.03)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill="grey95"), 
+        legend.position = "top",
+        legend.key.width = unit(2, "cm")) +
+  scale_color_manual(values = my_pal, name = NULL,
+                     breaks = c("Sample", "IG", "WHO", "Hadlock", "Medvedev", "FMF")) +
+  guides(color = guide_legend(nrow = 1)) 
+
+ggsave("Plots/Fig7.png", dpi = 300, width = 12, height = 6)
+```
+  
+  
+Посмотрим на общее соотношение процентилей шкал с нашей выборкой.  
+  
+```{r percentile bpd, fig.dpi = 300, fig.width = 7, fig.height = 6, fig.align = "center", out.width = '70%'}
+df |> 
+  filter(`Срок нед` != 29) |> 
+  filter(`Срок нед` != 39) |> 
+  mutate(Abd_norm = (`БПР` - min(`БПР`, na.rm = T))/(max(`БПР`, na.rm = T) - min(`БПР`, na.rm = T))*100) |> 
+  select(`IG21st centile БПР`, `ВОЗ centile БПР`, Abd_norm, `Медв  centile БПР`, 
+          `Had сentile БПР`) |> 
+  ggplot() +
+  geom_density(aes(`IG21st centile БПР`, color = "IG"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`ВОЗ centile БПР`, color = "WHO"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+    geom_density(aes(`Had сentile БПР`, color = "Hadlock"), na.rm = T, linewidth = 0.7,  linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`Медв  centile БПР`, color = "Medvedev"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(Abd_norm, color = "Sample"), na.rm = T, linewidth = 1.2, 
+               key_glyph = draw_key_path) + 
+  theme_minimal(base_size = 16) +
+  labs(x = "Percentile", y = NULL) +
+  scale_x_continuous(breaks = seq(0,100,25)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill="grey95"), 
+        legend.position = "right") +
+  scale_color_manual(values = my_pal, name = NULL,
+                     breaks = c("Sample", "IG", "WHO", "Hadlock", "Medvedev", "FMF")) +
+  guides(color = guide_legend(ncol = 1))
+
+ggsave("Plots/Fig8.png", dpi = 300, width = 7, height = 6)
+```
+  
+  
+Можно отметить, что распределение всех шкал скошенное, относительное нашего репрезентативного распределения.  
+  
+  
+Теперь посмотрим насколько совпадают табличные значения процентилей шкал с нашей выборкой.  
+  
+```{r accordance scores bpd, fig.dpi = 300, fig.width = 10, fig.height = 10, fig.align = "center"}
+results <- cycle(N = 3, J = 16, Proportion = c(0.1,0.5,0.9), IG_score = IG_bpd, WHO_score = WHO_bpd, FMF_score = FMF_bpd, Had_score = Had_bpd, Med_score = Med_bpd, Vr = 20, data = df, B = 9999)
+
+results |> 
+  select(-p_FMF) |> 
+  mutate(prop = percent_format()(prop)) |> 
+  pivot_longer(cols = c(p_IG, p_WHO, p_Had, p_Med)) |> 
+  mutate(name = factor(name, levels = c("p_IG", "p_WHO", "p_Had", "p_Med"), 
+                       labels = c(p_IG = "IG", p_WHO = "WHO",
+                                  p_Had = "Hadlock",p_Med = "Medvedev")),
+         prop = factor(prop, levels =c ("10%", "50%", "90%"))) |> 
+  ggplot(aes(Age, value, color = name)) +
+  geom_line(size = 0.7, show.legend = F) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  theme_bw(base_size = 16) +
+  labs(x = "Gestational age", y = "Accordance") +
+  facet_grid2(name ~ prop, 
+              strip = strip_themed(background_y = elem_list_rect(fill = fills))) +
+  scale_x_continuous(breaks = seq(25, 40, 5)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.5)) +
+  theme(strip.text.y = element_text(angle = 0, color = "white"),
+        strip.background = element_rect(fill="grey95")) +
+  scale_color_nejm(name = "Score")
+
+ggsave("Plots/Fig9.png", dpi = 300, width = 10, height = 10)
+```
+  
+  
+И теперь посмотрим на непосредственный результат и сравним между собой кривые.  
+  
+```{r AUC scores bpd}
+AUC_r <- results |> 
+  select(-p_FMF) |> 
+    mutate(Age_norm = (Age - min(Age))/(max(Age) - min(Age))) |> 
+    group_by(prop) |> 
+    summarise(IG = DescTools::AUC(Age_norm, p_IG, method = "spline"),
+              WHO = DescTools::AUC(Age_norm, p_WHO, method = "spline"),
+              Had = DescTools::AUC(Age_norm, p_Had, method = "spline"),
+              Med = DescTools::AUC(Age_norm, p_Med, method = "spline"))
+  
+pv <- AUC_r |> 
+    mutate(IG = IG * 1000,
+           WHO = WHO * 1000,
+           Had = Had * 1000,
+           Med = Med * 1000) |> 
+    pivot_longer(cols = 2:5) |> 
+    nest(data = -prop) |> 
+    transmute(prop = prop, 
+              p = map_dbl(data, 
+                          ~prop.test(.x$value, c(1000,1000,1000,1000), correct = F)$p.val))
+  
+AUC_P <- AUC_r |> 
+    mutate(IG = percent_format(accuracy = 0.01)(IG),
+           WHO = percent_format(accuracy = 0.01)(WHO),
+           Had = percent_format(accuracy = 0.01)(Had),
+           Med = percent_format(accuracy = 0.01)(Med)) |> 
+    left_join(pv) |> 
+    mutate(Percentile = percent_format(accuracy = 1)(prop),
+           `p-value` = pvalue_format()(p)) |> 
+    select(Percentile, IG, WHO, Had, Med, `p-value`)
+
+#Final results for scores
+gt(AUC_P) |> 
+  cols_align(align = "center") |> 
+  cols_width(everything() ~ px(100))  |> 
+  cols_label("Had" ~ "Hadlock", "Med" ~ "Medvedev", .fn = md)
+```
+  
+  
+# Длина бедра
+  
+  
+Посмотрим как соотносятся наше распределение выборки с процентилями по шкалам по сроку.  
+  
+```{r percentile all age lf, fig.dpi = 300, fig.width = 12, fig.height = 6, fig.align = "center"}
+df |> 
+  filter(`Срок нед` != 41) |> 
+  group_by(`Срок нед`) |> 
+  mutate(Abd_norm = (`ДБ` - min(`ДБ`, na.rm = T))/(max(`ДБ`, na.rm = T) - min(`ДБ`, na.rm = T))*100) |> 
+  select(`IG21st  centile ДБ`, `ВОЗ centile ДБ`, Abd_norm, `Медв centile ДБ`, 
+         `FMF centile ДБ`, `Had centile ДБ`, `Срок нед`) |> 
+  ggplot() +
+  geom_density(aes(`IG21st  centile ДБ`, color = "IG"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`ВОЗ centile ДБ`, color = "WHO"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`Had centile ДБ`, color = "Hadlock"), na.rm = T, linewidth = 0.7,  linetype = 2, 
+               key_glyph = draw_key_path) +
+    geom_density(aes(`Медв centile ДБ`, color = "Medvedev"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`FMF centile ДБ`, color = "FMF"), na.rm = T, linewidth = 0.7, linetype = 2, 
+               key_glyph = draw_key_path) + 
+  geom_density(aes(Abd_norm, color = "Sample"), na.rm = T, linewidth = 1.2, 
+               key_glyph = draw_key_path) + 
+  theme_minimal(base_size = 16) +
+  labs(x = "Percentile", y = NULL) +
+  facet_wrap( ~ `Срок нед`, ncol = 8) +
+  scale_x_continuous(breaks = seq(0,100,50)) +
+  scale_y_continuous(breaks = seq(0, 0.06, 0.03)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill="grey95"), 
+        legend.position = "top",
+        legend.key.width = unit(2, "cm")) +
+  scale_color_manual(values = my_pal, name = NULL,
+                     breaks = c("Sample", "IG", "WHO", "Hadlock", "Medvedev", "FMF")) +
+  guides(color = guide_legend(nrow = 1)) 
+
+ggsave("Plots/Fig10.png", dpi = 300, width = 12, height = 6)
+```
+  
+  
+Посмотрим на общее соотношение процентилей шкал с нашей выборкой.  
+  
+```{r percentile lf, fig.dpi = 300, fig.width = 7, fig.height = 6, fig.align = "center", out.width = '70%'}
+df |> 
+  filter(`Срок нед` != 29) |> 
+  filter(`Срок нед` != 33) |> 
+  filter(`Срок нед` != 35) |> 
+  filter(`Срок нед` != 38) |> 
+  mutate(Abd_norm = (`ДБ` - min(`ДБ`, na.rm = T))/(max(`ДБ`, na.rm = T) - min(`ДБ`, na.rm = T))*100) |> 
+  select(`IG21st  centile ДБ`, `ВОЗ centile ДБ`, Abd_norm, `Медв centile ДБ`, 
+         `FMF centile ДБ`, `Had centile ДБ`) |> 
+  ggplot() +
+  geom_density(aes(`IG21st  centile ДБ`, color = "IG"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`ВОЗ centile ДБ`, color = "WHO"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`Had centile ДБ`, color = "Hadlock"), na.rm = T, linewidth = 0.7,  linetype = "aa",
+               key_glyph = draw_key_path) + 
+    geom_density(aes(`Медв centile ДБ`, color = "Medvedev"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(`FMF centile ДБ`, color = "FMF"), na.rm = T, linewidth = 0.7, linetype = "aa",
+               key_glyph = draw_key_path) + 
+  geom_density(aes(Abd_norm, color = "Sample"), na.rm = T, linewidth = 1.2, 
+               key_glyph = draw_key_path) + 
+  theme_minimal(base_size = 16) +
+  labs(x = "Percentile", y = NULL) +
+  scale_x_continuous(breaks = seq(0,100,25)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_rect(fill="grey95"), 
+        legend.position = "right") +
+  scale_color_manual(values = my_pal, name = NULL,
+                     breaks = c("Sample", "IG", "WHO", "Hadlock", "Medvedev", "FMF")) +
+  guides(color = guide_legend(ncol = 1))
+
+ggsave("Plots/Fig11.png", dpi = 300, width = 7, height = 6)
+```
+  
+  
+Можно отметить, что распределение всех шкал скошенное, относительное нашего репрезентативного распределения.  
+  
+  
+Теперь посмотрим насколько совпадают табличные значения процентилей шкал с нашей выборкой.  
+  
+```{r accordance scores lf, fig.dpi = 300, fig.width = 10, fig.height = 10, fig.align = "center"}
+results <- cycle(N = 3, J = 16, Proportion = c(0.1,0.5,0.9), IG_score = IG_fl, WHO_score = WHO_fl, FMF_score = FMF_fl, Had_score = Had_fl, Med_score = Med_fl, Vr = 23, data = df, B = 9999)
+
+results |> 
+  mutate(prop = percent_format()(prop)) |> 
+  pivot_longer(cols = c(p_IG, p_WHO, p_FMF, p_Had, p_Med)) |> 
+  mutate(name = factor(name, levels = c("p_IG", "p_WHO", "p_Had", "p_Med", "p_FMF"), 
+                       labels = c(p_IG = "IG", p_WHO = "WHO",
+                                  p_Had = "Hadlock",p_Med = "Medvedev",p_FMF = "FMF")),
+         prop = factor(prop, levels =c ("10%", "50%", "90%"))) |> 
+  ggplot(aes(Age, value, color = name)) +
+  geom_line(size = 0.7, show.legend = F) +
+  geom_hline(yintercept = 0.05, linetype = 2) +
+  theme_bw(base_size = 16) +
+  labs(x = "Gestational age", y = "Accordance") +
+  facet_grid2(name ~ prop, 
+              strip = strip_themed(background_y = elem_list_rect(fill = fills))) +
+  scale_x_continuous(breaks = seq(25, 40, 5)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.5)) +
+  theme(strip.text.y = element_text(angle = 0, color = "white"),
+        strip.background = element_rect(fill="grey95")) +
+  scale_color_nejm(name = "Score")
+
+ggsave("Plots/Fig12.png", dpi = 300, width = 10, height = 10)
+```
+  
+  
+И теперь посмотрим на непосредственный результат и сравним между собой кривые.  
+  
+```{r AUC scores lf}
+gt(AUC(results)) |> 
+  cols_align(align = "center") |> 
+  cols_width(everything() ~ px(100))  |> 
+  cols_label("Had" ~ "Hadlock", "Med" ~ "Medvedev", .fn = md)
+```
+
+
+

@@ -1,0 +1,519 @@
+---
+title: "Оценка шкал на исходы"
+output:
+  html_document: default
+  word_document: 
+    reference_docx: "template.docx"
+date: 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+library(readxl)
+library(tidyverse)
+library(gtsummary)
+library(gt)
+library(lme4)
+library(modelsummary)
+library(fastDummies)
+library(epiR)
+library(flextable)
+library(emmeans)
+library(see)
+
+df <- read_excel("Data/df_outcome.xlsx") |> 
+  filter(Outcome != 4)|> 
+  dummy_cols(select_columns = c("FMF", "Hadlock", "Medvedev", "WHO", "IG", "Outcome")) |> 
+  mutate(FMF_6 = FMF_2 + FMF_3,           #6 - 2 и 3
+         Hadlock_6 = Hadlock_3,
+         Medvedev_6 = Medvedev_3,
+         WHO_6 = WHO_2 + WHO_3,
+         IG_6 = IG_2 + IG_3,
+         FMF_5 = FMF_0 + FMF_4,             #5 - 0 и 4
+         Hadlock_5 = Hadlock_0 + Hadlock_4,
+         Medvedev_5 = Medvedev_0 + Medvedev_4,
+         WHO_5 = WHO_0 + WHO_4,
+         IG_5 = IG_0 + IG_4,
+         FMF_7 = FMF_1 + FMF_2 + FMF_3,     #7 - 1, 2 и 3
+         Hadlock_7 = Hadlock_1 + Hadlock_3,
+         Medvedev_7 = Medvedev_1 + Medvedev_3,
+         WHO_7 = WHO_1 + WHO_2 + WHO_3,
+         IG_7 = IG_1+ IG_2 + IG_3,
+         Outcome_bin1 = factor(Outcome_bin, labels = c("1", "0")), #благоприятный - 1
+         FMF_8 = FMF_1 + FMF_2 + FMF_3 + FMF_4,  #8 - 1 + 2 + 3 +4
+         Hadlock_8 = Hadlock_1 + Hadlock_3 + Hadlock_4,
+         Medvedev_8 = Medvedev_1 + Medvedev_3 + Medvedev_4,
+         WHO_8 = WHO_1 + WHO_2 + WHO_3 + WHO_4,
+         IG_8 = IG_1+ IG_2 + IG_3 + IG_4,
+         Outcome_4 = Outcome_1 + Outcome_3)  #4 = 1 + 3
+
+
+Dummy_se <- function(Var, Ind){
+
+model_Se <- function(df) {
+  epi.tests(table(factor(df$value, levels = c(1,0)), factor(Var, levels = c(1,0))))$detail[3,2]
+}
+
+model_Se_LCI <- function(df) {
+  epi.tests(table(factor(df$value, levels = c(1,0)), factor(Var, levels = c(1,0))))$detail[3,3]
+}
+
+model_Se_UCI <- function(df) {
+  epi.tests(table(factor(df$value, levels = c(1,0)), factor(Var, levels = c(1,0))))$detail[3,4]
+}
+
+model_Sp <- function(df) {
+  epi.tests(table(factor(df$value, levels = c(1,0)), factor(Var, levels = c(1,0))))$detail[4,2]
+}
+
+model_Sp_LCI <- function(df) {
+  epi.tests(table(factor(df$value, levels = c(1,0)), factor(Var, levels = c(1,0))))$detail[4,3]
+}
+
+model_Sp_UCI <- function(df) {
+  epi.tests(table(factor(df$value, levels = c(1,0)), factor(Var, levels = c(1,0))))$detail[4,4]
+}
+
+df1 <- df |> 
+  pivot_longer(cols = c(21:46, 50:64, 66:70)) |> 
+  separate(name, c("Score", "Index"),sep = "_") |> 
+  filter(Index == Ind) |>
+  group_by(Score) |> 
+  nest() |> 
+  mutate(Se = map(data, model_Se),
+         LCI = map(data, model_Se_LCI),
+         UCI = map(data, model_Se_UCI))|> 
+  unnest(c(Se, LCI, UCI)) |> 
+  tibble() 
+
+tab_Se <- df1|> 
+  mutate(Se = paste0(round(Se*100,2), " (", round(LCI*100,2), " - ", round(UCI*100,2), ")")) |> 
+  select(-c(data, LCI, UCI))
+
+pv_Se <- df1|> 
+  mutate(Se = Se*100) |> 
+  summarise(p = prop.test(Se, c(rep(100,length(df1$Score))))$p.value) |> 
+  mutate(p_se = ifelse(p < 0.001, "<0.001", round(p, 3))) |> 
+  select(p_se)
+
+df2 <- df |> 
+  pivot_longer(cols = c(21:46, 50:64, 66:70)) |> 
+  separate(name, c("Score", "Index"),sep = "_") |> 
+  filter(Index == Ind) |>
+  group_by(Score) |> 
+  nest() |> 
+  mutate(Sp = map(data, model_Sp),
+         LCI = map(data, model_Sp_LCI),
+         UCI = map(data, model_Sp_UCI))|> 
+  unnest(c(Sp, LCI, UCI)) |> 
+  tibble() 
+
+tab_Sp <- df2|> 
+  mutate(Sp = paste0(round(Sp*100,2), " (", round(LCI*100,2), " - ", round(UCI*100,2), ")")) |> 
+  select(-c(Score,data, LCI, UCI))
+
+pv_Sp <- df2|> 
+  mutate(Sp = Sp*100) |> 
+  summarise(p = prop.test(Sp, c(rep(100,length(df2$Score))))$p.value) |> 
+  mutate(p_sp = ifelse(p < 0.001, "<0.001", round(p, 3))) |> 
+  select(p_sp)
+
+cbind(tab_Se, pv_Se, tab_Sp, pv_Sp) |> 
+  flextable() |> 
+  merge_v(j = "p_se") |> 
+  merge_v(j = "p_sp") |> 
+  autofit() |> 
+  theme_box() |> 
+  align(align = "center", part = "all")
+}
+```
+
+# Оценка чувствительности по шкалам на исход
+
+## Шкала - норма (0 и 4); исход - норма (0)
+
+```{r}
+Dummy_se(df$Outcome_0, Ind = 5)
+```
+
+Наилучший результат значимо определяется у FMF и Hadlock (смотря что нам наиболее важно).  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_0, FMF_5, Hadlock_5, Medvedev_5, WHO_5, IG_5) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_0, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_0 == 0, 0, 
+                        ifelse(value == 1 & Outcome_0 == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_0, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Outcome = 0", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (0,4), исход (0).png", dpi=400, width=8, height=7)
+```
+
+## Шкала - не норма (1,2,3); исход - не норма (1,3)
+
+```{r}
+Dummy_se(df$Outcome_4, Ind = 7)
+```
+
+Наилучший результат значимо определяется у FMF и Hadlock (смотря что нам наиболее важно).  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_4, FMF_7, Hadlock_7, Medvedev_7, WHO_7, IG_7) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_4, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_4 == 0, 0, 
+                        ifelse(value == 1 & Outcome_4 == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_4, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Outcome = 0", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (1,2,3), исход (1,3).png", dpi=400, width=8, height=7)
+```
+
+
+
+## Шкала - ЗРП (1); исход - Маловесный плод (1)
+
+```{r}
+Dummy_se(df$Outcome_1, Ind = 1)
+```
+
+Наилучший результат значимо определяется у Hadlock.  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_1, FMF_1, Hadlock_1, Medvedev_1, WHO_1, IG_1) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_1, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_1 == 0, 0, 
+                        ifelse(value == 1 & Outcome_1 == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_1, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Outcome = 1", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (1), исход (1).png", dpi=400, width=8, height=7)
+```
+
+## Шкала - ЗРП (2 и 3); исход - Маловесный плод для ГВ (3)
+
+```{r}
+Dummy_se(df$Outcome_3, Ind = 6)
+```
+
+Наилучший результат значимо определяется у FMF (если нам важна чувствительность), Medvedev и WHO.  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_3, FMF_6, Hadlock_6, Medvedev_6, WHO_6, IG_6) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_3, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_3 == 0, 0, 
+                        ifelse(value == 1 & Outcome_3 == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_3, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Outcome = 3", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (2,3), исход (3).png", dpi=400, width=8, height=7)
+```
+
+## Шкала - норма (0); исход - норма (0)
+
+```{r}
+Dummy_se(df$Outcome_0, Ind = 0)
+```
+
+Наилучший результат значимо определяется у IG.  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_0, FMF_0, Hadlock_0, Medvedev_0, WHO_0, IG_0) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_0, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_0 == 0, 0, 
+                        ifelse(value == 1 & Outcome_0 == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_0, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Outcome = 0", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (0), исход (0).png", dpi=400, width=8, height=7)
+```
+
+## Шкала - не норма (1+2+3+4); исход - не норма (1+3)
+
+```{r}
+Dummy_se(df$Outcome_4, Ind = 8)
+```
+
+Наилучший результат значимо определяется у IG.  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_4, FMF_8, Hadlock_8, Medvedev_8, WHO_8, IG_8) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_4, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_4 == 0, 0, 
+                        ifelse(value == 1 & Outcome_4 == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_4, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Outcome = 4", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (1,2,3,4), исход (1,3).png", dpi=400, width=8, height=7)
+```
+  
+Для поиска норма(0)/ненорма (1,2,3,4) лучший вариант IG. При норме как 1 и 4 наилучшая для уменьшения ложноотрицательных результатов FMF, ложноположительных - Hadlock. Для соответсвия ЗРП маловесному плоду наилучший вариант Hadlock. Для ЗРП маловесному плоду для ГВ наилучшая для уменьшения ложноотрицательных результатов FMF, ложноположительных - WHO или IG.  
+  
+  
+# Оценка чувствительности по шкалам на исход (хороший/плохой)
+
+## Шкала - норма (0 и 4); исход - хороший
+
+```{r}
+Dummy_se(df$Outcome_bin1, Ind = 5)
+```
+
+Наилучший результат значимо определяется у FMF.  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_bin1, FMF_5, Hadlock_5, Medvedev_5, WHO_5, IG_5) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_bin1, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_bin1 == 0, 0, 
+                        ifelse(value == 1 & Outcome_bin1 == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_bin1, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Благоприятный/неблагоприятный исход", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (0,4), исход (хороший).png", dpi=400, width=8, height=7)
+```
+
+## Шкала - норма (0); исход - хороший
+
+```{r}
+Dummy_se(df$Outcome_bin1, Ind = 0)
+```
+
+Наилучший результат значимо определяется у IG.  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_bin1, FMF_0, Hadlock_0, Medvedev_0, WHO_0, IG_0) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_bin1, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_bin1 == 0, 0, 
+                        ifelse(value == 1 & Outcome_bin1 == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_bin1, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Благоприятный/неблагоприятный исход", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (0), исход (хороший).png", dpi=400, width=8, height=7)
+```
+
+## Шкала - не норма (1, 2 и 3); исход - плохой
+
+```{r}
+Dummy_se(df$Outcome_bin, Ind = 7)
+```
+
+Наилучший результат значимо определяется у FMF.  
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_bin, FMF_7, Hadlock_7, Medvedev_7, WHO_7, IG_7) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_bin, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_bin == 0, 0, 
+                        ifelse(value == 1 & Outcome_bin == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_bin, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Неблагоприятный/благоприятный исход", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (1,2,3), исход (плохой).png", dpi=400, width=8, height=7)
+```
+
+## Шкала - не норма (1, 2, 3, 4); исход - плохой
+
+```{r}
+Dummy_se(df$Outcome_bin, Ind = 8)
+```
+
+Наилучший результат значимо определяется у IG.    
+
+## Визуализация
+
+```{r, fig.dpi=400, fig.width=8, fig.height=7}
+df |> 
+  select(Outcome_bin, FMF_8, Hadlock_8, Medvedev_8, WHO_8, IG_8) |> 
+  pivot_longer(cols = 2:6) |> 
+  separate(name, "name", "_") |> 
+  na.omit() |> 
+  group_by(Outcome_bin, name) |> 
+  count(name, value) |> 
+  mutate(prct = n/sum(n),
+         color = ifelse(value == 0 & Outcome_bin == 0, 0, 
+                        ifelse(value == 1 & Outcome_bin == 1, 1, 2))) |> 
+  ggplot(aes(x = factor(Outcome_bin, levels = c("1","0")), y = prct, 
+             group = factor(color))) +
+  geom_bar(aes(fill = factor(color)), position = "stack", stat = 'identity') +
+  geom_label(aes(label = scales::percent(prct)),
+             position = position_fill(vjust = 0.5), fill = "white") +
+  facet_wrap(~ name) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = 14) +
+  labs(x = "Неблагоприятный/благоприятный исход", y = "Percent") +
+  scale_fill_manual(name = "Value", values = c("#E41A1C", "#377EB8", "#999999"),
+                    breaks = c("1", "0", "2"),
+                    labels = c("Se", "Sp", "False"))
+
+ggsave("Plots/Шкала (1,2,3,4), исход (плохой).png", dpi=400, width=8, height=7)
+```
+  
+В случае хороший/плохой, я бы ориентировался на FMF, т.к. у нее наилучшее соотношение Se/Sp, а вариант нормы и хороший исход будут просто получены перестановкой (если сравним с таблицей "Шкала - норма (0 и 4); исход - хороший", то заметим это).  
+
+
+
+
+
